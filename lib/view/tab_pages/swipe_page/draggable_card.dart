@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:swiping_project/model/data_structures/user.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -29,17 +28,24 @@ class _DraggableCardState extends State<DraggableCard> with SingleTickerProvider
   double _rotation = 0.0;
   double? _startDragX;
   late AnimationController _controller;
-  late Animation<Offset> _animation;
   bool expanded = false;
 
-  final double threshold = 100.0; // when its consider swipe
-  final double minDrag = 30.0;   //min for showing drag
+  static const double threshold = 100.0; // when its consider swipe
+  static const double minDrag = 30.0;   // min for showing drag
+  static const int animationDuration = 300; // in milliseconds
+  static const double rotationFactor = 300.0; // How fast the card rotates
+  static const double maxDragDistance = 400.0; // How far the card can be dragged
+
+
 
   @override
   void initState()
   {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
+    _controller = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: animationDuration)
+    );
   }
 
   @override
@@ -51,34 +57,77 @@ class _DraggableCardState extends State<DraggableCard> with SingleTickerProvider
 
   void _animateSwipe(Offset targetOffset, VoidCallback onComplete)
   {
+    // Stop any ongoing animation
     _controller.stop();
     _controller.reset();
-    _startDragX = null;
-    _animation = Tween<Offset>(begin: _position, end: targetOffset)
-        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut))
-      ..addListener(() {
-        setState(() {
-          _position = _animation.value;
-          _rotation = _position.dx / 300; //speed of rotate
-        });
-      })
-      ..addStatusListener((status)
+
+    // Calculate proper rotation based on actual current position
+    final double startRotation = _rotation;
+    final double endRotation;
+    if ( targetOffset == Offset.zero)
+      endRotation = 0.0;
+    else
+      endRotation = targetOffset.dx / rotationFactor;
+
+    // Create position animation from current position to target
+    final Animation<Offset> positionAnim = Tween<Offset>(
+        begin: _position,
+        end: targetOffset
+    ).animate(CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeOut
+    ));
+
+    // Create rotation animation from current rotation to target
+    final Animation<double> rotationAnim = Tween<double>(
+        begin: startRotation,
+        end: endRotation
+    ).animate(CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeOut
+    ));
+
+    // Update position and rotation during animation
+    void listener()
+    {
+      if (mounted)
       {
-        if (status == AnimationStatus.completed)
+        setState(()
         {
-          onComplete();
+          _position = positionAnim.value;
+          _rotation = rotationAnim.value;
+        });
+      }
+    }
+
+    // Handle animation completion
+    void statusListener(AnimationStatus status)
+    {
+      if (status == AnimationStatus.completed)
+      {
+        onComplete();
+        if (mounted)
+        {
           setState(() {
             _position = Offset.zero;
-            _rotation = 0;
+            _rotation = 0.0;
             _startDragX = null;
           });
         }
-      });
+        _controller.removeListener(listener);
+        _controller.removeStatusListener(statusListener);
+      }
+    }
+
+    _controller.addListener(listener);
+    _controller.addStatusListener(statusListener);
     _controller.forward();
   }
 
+
   void _onDragStart(DragStartDetails details)
   {
+    // Prevent drag during animation
     if (_controller.isAnimating)
       return;
     _startDragX = details.globalPosition.dx;
@@ -86,32 +135,38 @@ class _DraggableCardState extends State<DraggableCard> with SingleTickerProvider
 
   void _onDragUpdate(DragUpdateDetails details)
   {
+    // Prevent update during animation or if drag hasn't started
     if (_controller.isAnimating || _startDragX == null)
       return;
 
     setState(()
     {
+      // Calculate horizontal displacement
       double dx = details.globalPosition.dx - _startDragX!;
-      dx = dx.clamp(-400.0, 400.0); //motion limits
+      // Clamp displacement to prevent excessive dragging
+      dx = dx.clamp(-maxDragDistance, maxDragDistance);
       _position = Offset(dx, 0);
-      _rotation = _position.dx / 300; //speed of rotate
+      // Update rotation based on displacement
+      _rotation = _position.dx / rotationFactor;
     });
   }
 
   void _onDragEnd(DragEndDetails details)
   {
+    // Prevent action during animation or if drag hasn't started
     if (_controller.isAnimating || _startDragX == null)
       return;
 
-    if (_position.dx.abs() < minDrag)
-      _animateSwipe(Offset.zero, () {});
-    else if (_position.dx > threshold)
-      _animateSwipe(Offset(400, 0), widget.onSwipeRight); //animation for right swipe
-    else if (_position.dx < -threshold)
-      _animateSwipe(Offset(-400, 0), widget.onSwipeLeft); //animation for left swipe
-    else
-      _animateSwipe(Offset.zero, () {});
+    // Determine swipe action based on displacement
 
+    if (_position.dx.abs() < minDrag) // Minimal drag - return to center
+      _animateSwipe(Offset.zero, () {});
+    else if (_position.dx > threshold) // Right swipe exceeds threshold - complete right swipe
+      _animateSwipe(Offset(maxDragDistance, 0), widget.onSwipeRight);
+    else if (_position.dx < -threshold) // Left swipe exceeds threshold - complete left swipe
+      _animateSwipe(Offset(-maxDragDistance, 0), widget.onSwipeLeft);
+    else // Drag below threshold - return to center
+      _animateSwipe(Offset.zero, () {});
     _startDragX = null;
   }
 
@@ -127,72 +182,72 @@ class _DraggableCardState extends State<DraggableCard> with SingleTickerProvider
           onHorizontalDragStart: _onDragStart,
           onHorizontalDragUpdate: _onDragUpdate,
           onHorizontalDragEnd: _onDragEnd,
-            child: AspectRatio(
-              aspectRatio: 2 / 3,
-              child: Card(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                elevation: 8,
-                clipBehavior: Clip.hardEdge,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _buildCardImage(widget.user.image),
-                    Positioned(bottom: 0, left: 0, right: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(10),
-                        color: Colors.black.withValues(alpha: 0.6),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildAgeNameCityText(widget.user.age, widget.user.name, widget.user.city),
-                            if (expanded)
-                              _buildShowWhatImWrite(widget.user.about),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                _circleButton("❌",() => _animateSwipe(Offset(-400, 0), widget.onSwipeLeft)),
-                                _buildShowWhatImWriteBtn(),
-                                _circleButton("❤️",() => _animateSwipe(Offset(400, 0), widget.onSwipeRight)),
-                              ],
-                            ),
-                          ],
-                        ),
+          child: AspectRatio(
+            aspectRatio: 2 / 3,
+            child: Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              elevation: 8,
+              clipBehavior: Clip.hardEdge,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _buildCardImage(widget.user.image),
+                  Positioned(bottom: 0, left: 0, right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      color: Colors.black.withValues(alpha: 0.6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildAgeNameCityText(widget.user.age, widget.user.name, widget.user.city),
+                          if (expanded)
+                            _buildShowWhatImWrite(widget.user.about),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _circleButton("❌",() => _animateSwipe(Offset(-maxDragDistance, 0), widget.onSwipeLeft)),
+                              _buildShowWhatImWriteBtn(),
+                              _circleButton("❤️",() => _animateSwipe(Offset(maxDragDistance, 0), widget.onSwipeRight)),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
         ),
+      ),
     );
   }
 
   Widget _buildShowWhatImWrite(String about)
   {
     return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(top: 10, bottom: 10),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.3),
-      child : Scrollbar(
-        thumbVisibility: true,
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Text(
-          about,
-          style: const TextStyle(color: Colors.white, fontSize: 18),
-          textAlign: TextAlign.center,
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 10, bottom: 10),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(10),
         ),
-      ),
-      )
-      )
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.3),
+        child : Scrollbar(
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Text(
+                  about,
+                  style: const TextStyle(color: Colors.white, fontSize: 18),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            )
+        )
     );
   }
 
@@ -258,7 +313,3 @@ class _DraggableCardState extends State<DraggableCard> with SingleTickerProvider
 
 
 }
-
-
-
-
